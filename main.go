@@ -1,22 +1,52 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 
+	"github.com/google/uuid"
+
+	"example.com/Chirpy/internal/database"
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
+type apiConfig struct {
+	fileserverHits atomic.Int32
+	db             *database.Queries
+	platform       string
+}
+
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
+
 func main() {
+	godotenv.Load()
+
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	const filepathRoot = "."
 	const port = "8080"
 
 	cfg := apiConfig{
 		fileserverHits: atomic.Int32{},
+		db:             database.New(db),
+		platform:       os.Getenv("PLATFORM"),
 	}
 
 	mux := http.NewServeMux()
@@ -25,6 +55,7 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", cfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", cfg.handlerHitsReset)
 	mux.HandleFunc("POST /api/validate_chirp", handlerValidateChirp)
+	mux.HandleFunc("POST /api/users", cfg.handlerUserCreate)
 
 	server := &http.Server{
 		Addr:    ":" + port,
@@ -79,33 +110,34 @@ func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func respondWithError(w http.ResponseWriter, code int, msg string, err error) {
+func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) {
+	type emailAsJson struct {
+		Email string `json:"email"`
+	}
+	type response struct {
+		User
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	email := emailAsJson{}
+	err := decoder.Decode(&email)
 	if err != nil {
-		log.Println(err)
-	}
-
-	if code > 499 {
-		log.Printf("Responding with 5XX error: %s", msg)
-	}
-
-	type errorResponse struct {
-		Error string `json:"error"`
-	}
-
-	respondWithJSON(w, code, errorResponse{
-		Error: msg,
-	})
-}
-
-func respondWithJSON(w http.ResponseWriter, code int, payload interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	dat, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("Error marchslling JSON: %s", err)
-		w.WriteHeader(500)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
 		return
 	}
-	w.WriteHeader(code)
-	w.Write(dat)
 
+	user, err := cfg.db.CreateUser(r.Context(), email.Email)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't complete db query", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusCreated, response{
+		User: User{
+			ID:        user.ID,
+			CreatedAt: user.CreatedAt,
+			UpdatedAt: user.UpdatedAt,
+			Email:     user.Email,
+		},
+	})
 }

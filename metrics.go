@@ -3,12 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
-	"sync/atomic"
 )
-
-type apiConfig struct {
-	fileserverHits atomic.Int32
-}
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -31,6 +26,11 @@ func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) handlerHitsReset(w http.ResponseWriter, r *http.Request) {
 	cfg.fileserverHits.Store(0)
+	if cfg.platform != "dev" {
+		respondWithError(w, http.StatusForbidden, "Reset can only be performed in dev", nil)
+		return
+	}
+	cfg.db.DeleteUsers(r.Context())
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("Hits reset to 0"))
 }
