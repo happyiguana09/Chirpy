@@ -6,8 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"slices"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -54,7 +52,8 @@ func main() {
 	mux.HandleFunc("GET /api/healthz", handlerReadiness)
 	mux.HandleFunc("GET /admin/metrics", cfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", cfg.handlerHitsReset)
-	mux.HandleFunc("POST /api/validate_chirp", handlerValidateChirp)
+	mux.HandleFunc("POST /api/chirps", cfg.handlerChirpsCreate)
+	mux.HandleFunc("GET /api/chirps", cfg.handlerGetChirps)
 	mux.HandleFunc("POST /api/users", cfg.handlerUserCreate)
 
 	server := &http.Server{
@@ -70,44 +69,6 @@ func handlerReadiness(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(http.StatusText(http.StatusOK)))
-}
-
-func handlerValidateChirp(w http.ResponseWriter, r *http.Request) {
-	type parameters struct {
-		Body string `json:"body"`
-	}
-	type returnVals struct {
-		Cleaned_body string `json:"cleaned_body"`
-	}
-
-	decoder := json.NewDecoder(r.Body)
-	params := parameters{}
-	err := decoder.Decode(&params)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
-		return
-	}
-
-	maxChirpLength := 140
-	if len(params.Body) > maxChirpLength {
-		respondWithError(w, 400, "Chirp is too long", nil)
-		return
-	}
-
-	profaneWords := []string{"kerfuffle", "sharbert", "fornax"}
-	words := strings.Fields(params.Body)
-	for i, word := range words {
-		if slices.Contains(profaneWords, strings.ToLower(word)) {
-			words[i] = "****"
-		}
-	}
-
-	msg := strings.Join(words, " ")
-
-	respondWithJSON(w, 200, returnVals{
-		Cleaned_body: msg,
-	})
-
 }
 
 func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) {
@@ -140,4 +101,26 @@ func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) 
 			Email:     user.Email,
 		},
 	})
+}
+
+func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
+	chirps, err := cfg.db.GetChirps(r.Context())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve chirps", err)
+		return
+	}
+
+	jsonChirps := []Chirp{}
+
+	for _, chirp := range chirps {
+		jsonChirps = append(jsonChirps, Chirp{
+			ID:        chirp.ID,
+			CreatedAt: chirp.CreatedAt,
+			UpdatedAt: chirp.UpdatedAt,
+			Body:      chirp.Body,
+			UserID:    chirp.UserID,
+		})
+	}
+
+	respondWithJSON(w, http.StatusOK, jsonChirps)
 }
