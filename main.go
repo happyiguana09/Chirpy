@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"example.com/Chirpy/internal/auth"
 	"example.com/Chirpy/internal/database"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -27,6 +28,11 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+}
+
+type UserInput struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 func main() {
@@ -54,6 +60,7 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", cfg.handlerHitsReset)
 	mux.HandleFunc("POST /api/chirps", cfg.handlerChirpsCreate)
 	mux.HandleFunc("GET /api/chirps", cfg.handlerGetChirps)
+	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.handlerGetChirpByID)
 	mux.HandleFunc("POST /api/users", cfg.handlerUserCreate)
 
 	server := &http.Server{
@@ -72,22 +79,30 @@ func handlerReadiness(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) {
-	type emailAsJson struct {
-		Email string `json:"email"`
-	}
 	type response struct {
 		User
 	}
 
 	decoder := json.NewDecoder(r.Body)
-	email := emailAsJson{}
-	err := decoder.Decode(&email)
+	newUser := UserInput{}
+	err := decoder.Decode(&newUser)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
 		return
 	}
 
-	user, err := cfg.db.CreateUser(r.Context(), email.Email)
+	hashedPassword, err := auth.HashPassword(newUser.Password)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Wrong format of password", err)
+		return
+	}
+
+	createUserParams := database.CreateUserParams{
+		Email:          newUser.Email,
+		HashedPassword: hashedPassword,
+	}
+
+	user, err := cfg.db.CreateUser(r.Context(), createUserParams)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't complete db query", err)
 		return
@@ -101,26 +116,4 @@ func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) 
 			Email:     user.Email,
 		},
 	})
-}
-
-func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
-	chirps, err := cfg.db.GetChirps(r.Context())
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't retrieve chirps", err)
-		return
-	}
-
-	jsonChirps := []Chirp{}
-
-	for _, chirp := range chirps {
-		jsonChirps = append(jsonChirps, Chirp{
-			ID:        chirp.ID,
-			CreatedAt: chirp.CreatedAt,
-			UpdatedAt: chirp.UpdatedAt,
-			Body:      chirp.Body,
-			UserID:    chirp.UserID,
-		})
-	}
-
-	respondWithJSON(w, http.StatusOK, jsonChirps)
 }
