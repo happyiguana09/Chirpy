@@ -21,6 +21,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	platform       string
+	jwt_secret     string
 }
 
 type User struct {
@@ -39,6 +40,20 @@ func main() {
 	godotenv.Load()
 
 	dbURL := os.Getenv("DB_URL")
+	if dbURL == "" {
+		log.Fatal("DB_URL must be set")
+	}
+
+	platform := os.Getenv("PLATFORM")
+	if platform == "" {
+		log.Fatal("PLATFORM must be set")
+	}
+
+	jwt_secret := os.Getenv("JWT_SECRET")
+	if dbURL == "" {
+		log.Fatal("JWT_SECRET must be set")
+	}
+
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatal(err)
@@ -50,7 +65,8 @@ func main() {
 	cfg := apiConfig{
 		fileserverHits: atomic.Int32{},
 		db:             database.New(db),
-		platform:       os.Getenv("PLATFORM"),
+		platform:       platform,
+		jwt_secret:     jwt_secret,
 	}
 
 	mux := http.NewServeMux()
@@ -62,6 +78,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", cfg.handlerGetChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", cfg.handlerGetChirpByID)
 	mux.HandleFunc("POST /api/users", cfg.handlerUserCreate)
+	mux.HandleFunc("POST /api/login", cfg.handlerLogin)
 
 	server := &http.Server{
 		Addr:    ":" + port,
@@ -93,7 +110,7 @@ func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) 
 
 	hashedPassword, err := auth.HashPassword(newUser.Password)
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Wrong format of password", err)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't hash password", err)
 		return
 	}
 
@@ -104,7 +121,7 @@ func (cfg *apiConfig) handlerUserCreate(w http.ResponseWriter, r *http.Request) 
 
 	user, err := cfg.db.CreateUser(r.Context(), createUserParams)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't complete db query", err)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create user", err)
 		return
 	}
 

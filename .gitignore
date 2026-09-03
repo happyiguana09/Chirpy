@@ -2,4 +2,4 @@
 /assets
 Chirpy
 go.sum
-out
+./out
